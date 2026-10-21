@@ -76,9 +76,9 @@ CLANG_DIAG_ON(unknown-pragmas)
 #include "Engine/WriteNode.h"
 #ifdef DEBUG
 #include "Engine/TLSHolder.h"
+#endif
 
 #include "Global/Profiling.h"
-#endif
 
 
 NATRON_NAMESPACE_ENTER
