@@ -52,6 +52,10 @@ if ! pacman -Q mingw-w64-x86_64-natron-build-deps-qt5 >/dev/null 2>&1; then
     "${NATRON_DIR}/.github/workflows/install_natron_pacman_repo.sh" "${NATRON_DIR}" "${NATRON_DIR}/natron_pacman_repo"
     retry pacman -S --needed --noconfirm --overwrite "*" mingw-w64-x86_64-natron-build-deps-qt5
 fi
+if ! pacman -Q mingw-w64-x86_64-natron-build-deps-qt5; then
+    echo "The Natron build dependencies are not installed: check the messages above."
+    exit 1
+fi
 
 echo "== Fetching OpenColorIO configs"
 if [[ ! -d "${NATRON_DIR}/OpenColorIO-Configs" ]]; then
