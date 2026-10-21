@@ -91,7 +91,8 @@ drop_broken_cache() {
     fi
 }
 
-# Clone an openfx repository at a pinned revision and apply its patch once.
+# Clone an openfx repository at a pinned revision and apply its patches
+# (patches/<name>.patch, then patches/<name>-*.patch), each one only once.
 fetch_plugin_source() {
     local name="$1" ref="$2" dir="${SRC_DIR}/$1"
     if [[ ! -d "${dir}/.git" ]]; then
@@ -99,11 +100,15 @@ fetch_plugin_source() {
         git -C "${dir}" checkout -q "${ref}"
     fi
     retry git -C "${dir}" submodule update --init --recursive
-    if git -C "${dir}" apply --reverse --check "${PATCH_DIR}/${name}.patch" 2>/dev/null; then
-        echo "${name}: patch already applied"
-    else
-        git -C "${dir}" apply "${PATCH_DIR}/${name}.patch"
-    fi
+    local patch
+    for patch in "${PATCH_DIR}/${name}.patch" "${PATCH_DIR}/${name}"-*.patch; do
+        [[ -f "${patch}" ]] || continue
+        if git -C "${dir}" apply --reverse --check "${patch}" 2>/dev/null; then
+            echo "${name}: $(basename "${patch}") already applied"
+        else
+            git -C "${dir}" apply "${patch}"
+        fi
+    done
 }
 
 # Configure and build a plug-in, then install each <Plugin>.ofx as an OFX bundle.

@@ -7,8 +7,11 @@ viewer sont lents, avant de changer quoi que ce soit dans le code.
   openfx-io sous MSYS2, dans l'environnement **UCRT64**, en `RelWithDebInfo`.
   Avec `--tracy`, Natron est instrumenté pour
   [Tracy](https://github.com/wolfpld/tracy).
-- `patches/` : correctifs de compilation des plug-ins, repris de
-  [Niik-l/Natron](https://github.com/Niik-l/Natron) (`tools/win-build/patches`).
+- `patches/` : correctifs de compilation des plug-ins. `openfx-io.patch` et
+  `openfx-misc.patch` sont repris de
+  [Niik-l/Natron](https://github.com/Niik-l/Natron) (`tools/win-build/patches`) ;
+  `openfx-io-ffmpeg9.patch` adapte l'écriture vidéo à FFmpeg 9, qui a supprimé
+  `AVCodec::pix_fmts`.
 
 Pourquoi UCRT64 et pas MINGW64 (utilisé par la CI Windows) : MSYS2 ne fabrique
 plus `pyside2`, `pyside6`, `python-qtpy`, `breakpad`, `openimageio` ni
