@@ -3,9 +3,16 @@
 Ce dossier sert à mesurer **où Natron perd son temps** quand l'interface et le
 viewer sont lents, avant de changer quoi que ce soit dans le code.
 
-- `build-msys2.sh` : compile Natron sous MSYS2 (mêmes étapes que la CI Windows),
-  en `RelWithDebInfo`. Avec `--tracy`, Natron est instrumenté pour
+- `build-msys2.sh` : compile Natron (Qt5) et les plug-ins openfx-misc et
+  openfx-io sous MSYS2, dans l'environnement **UCRT64**, en `RelWithDebInfo`.
+  Avec `--tracy`, Natron est instrumenté pour
   [Tracy](https://github.com/wolfpld/tracy).
+- `patches/` : correctifs de compilation des plug-ins, repris de
+  [Niik-l/Natron](https://github.com/Niik-l/Natron) (`tools/win-build/patches`).
+
+Pourquoi UCRT64 et pas MINGW64 (utilisé par la CI Windows) : MSYS2 ne fabrique
+plus `pyside2`, `pyside6`, `python-qtpy`, `breakpad`, `openimageio` ni
+`opencolorio` pour MINGW64, donc les dépendances de la CI ne s'installent plus.
 - `run-msys2.sh` : lance la version compilée avec les bonnes variables
   d'environnement (plug-ins, OCIO, Python).
 
@@ -30,7 +37,8 @@ les macros de `Global/Profiling.h` ne génèrent aucun code.
 ## Test B : profilage avec Tracy
 
 ### 1. Compiler
-Installer [MSYS2](https://www.msys2.org/), ouvrir le shell **MSYS2 MINGW64**, puis :
+Installer [MSYS2](https://www.msys2.org/), ouvrir le shell **MSYS2 UCRT64**
+(menu Démarrer ; l'invite doit afficher `UCRT64`), puis :
 
 ```bash
 git clone https://github.com/DenTas/Natron.git

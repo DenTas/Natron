@@ -1,0 +1,615 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 415277e..fc72623 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -382,11 +382,11 @@ if(${SEEXPR2_FOUND})
+   message(STATUS "  Adding SeExpr nodes")
+   target_include_directories(IO
+     PUBLIC
+-      ${SEEXPR2_INCLUDES}
++      ${SEEXPR2_INCLUDE_DIR}
+   )
+   target_link_libraries(IO
+     PUBLIC
+-      ${SEEXPR2_LIBRARIES}
++      ${SEEXPR2_LIBRARY}
+   )
+ else()
+   message(STATUS "  Not adding SeExpr nodes")
+@@ -399,7 +399,9 @@ set(OFX_ARCH UNKNOWN)
+ # Win
+ if(MINGW)
+     set(OFX_ARCH "Win32")
+-    if(${CMAKE_SYSTEM_PROCESSOR} STREQUAL "x86_64")
++    # MSYS2's CMake leaves CMAKE_SYSTEM_PROCESSOR empty; quote it to avoid a parse
++    # error and fall back to pointer size (8 == 64-bit) to select Win64.
++    if("${CMAKE_SYSTEM_PROCESSOR}" STREQUAL "x86_64" OR CMAKE_SIZEOF_VOID_P EQUAL 8)
+         set(OFX_ARCH "Win64")
+     endif()
+ # Visual Studio    
+diff --git a/FFmpeg/FFmpegFile.cpp b/FFmpeg/FFmpegFile.cpp
+index 0b2a2a2..c16ba34 100644
+--- a/FFmpeg/FFmpegFile.cpp
++++ b/FFmpeg/FFmpegFile.cpp
+@@ -1374,7 +1374,7 @@ FFmpegFile::demuxAndDecode(AVFrame* avFrameOut, int64_t frame)
+             found = true;
+         }
+         // If the current frame needs to be displayed longer than current_pts - prev_pts
+-        else if ((decodedFrameIdx < targetFrameIdx) && (stream->ptsToFrame(decodedFrame->pts + decodedFrame->pkt_duration) > targetFrameIdx)) {
++        else if ((decodedFrameIdx < targetFrameIdx) && (stream->ptsToFrame(decodedFrame->pts + decodedFrame->duration) > targetFrameIdx)) {
+             found = true;
+         }
+ 
+@@ -1443,7 +1443,7 @@ FFmpegFile::imageConvert(AVFrame* avFrameIn, AVFrame* avFrameOut)
+ 
+     avFrameOut->pts = avFrameIn->pts;
+     avFrameOut->pkt_dts = avFrameIn->pkt_dts;
+-    avFrameOut->pkt_duration = avFrameIn->pkt_duration;
++    avFrameOut->duration = avFrameIn->duration;
+ 
+     if (!avFrameOut->data[0]) {
+         int res = av_image_alloc(avFrameOut->data, avFrameOut->linesize, avFrameOut->width, avFrameOut->height, dstPixFmt, 32);
+diff --git a/IOSupport/GenericOCIO.cpp b/IOSupport/GenericOCIO.cpp
+index 30ffb3b..fd0addd 100644
+--- a/IOSupport/GenericOCIO.cpp
++++ b/IOSupport/GenericOCIO.cpp
+@@ -42,6 +42,7 @@
+ 
+ #include <cstdlib>
+ #include <cstring>
++#include <cctype>
+ #ifdef DEBUG
+ #include <cstdio>
+ #define DBG(x) x
+@@ -118,6 +119,15 @@ colorSpaceName(OCIO::ConstConfigRcPtr config,
+         } else if ((cs = config->getColorSpace("sRGB D65"))) {
+             // blender-cycles
+             return cs->getName();
++        } else if ((cs = config->getColorSpace("sRGB - Texture"))) {
++            // aces 1.1-1.3 (cg/studio configs also alias it as srgb_tx)
++            return cs->getName();
++        } else if ((cs = config->getColorSpace("srgb_rec709_scene"))) {
++            // aces 2.0 cg/studio configs ("sRGB Encoded Rec.709 (sRGB)")
++            return cs->getName();
++        } else if ((cs = config->getColorSpace("Utility - sRGB - Texture"))) {
++            // aces 1.0.x
++            return cs->getName();
+         } else if ((cs = config->getColorSpace("sRGB (D60 sim.)"))) {
+             // out_srgbd60sim or "sRGB (D60 sim.)" in aces 1.0.0
+             return cs->getName();
+@@ -202,6 +212,107 @@ colorSpaceName(OCIO::ConstConfigRcPtr config,
+     return colorSpaceNameDefault;
+ } // colorSpaceName
+ 
++// The colorspace to fall back on when a name is not in the config. The stock
++// code used the "default" ROLE and, when that was missing, wrote the literal
++// string "default" into the knob - which is exactly what the ACES 1.x/2.x
++// cg/studio configs lack, so every reset under those configs produced a text
++// field reading "default" and "Color space 'default' could not be found".
++// Try the roles a config is likely to have, then the first active colorspace.
++// Names a project may carry from another OCIO config, grouped by meaning:
++// nuke-default/blender "sRGB", ACES 1.x "sRGB - Texture", ACES 2 / OIIO 3
++// "srgb_rec709_scene", ... A project saved under one config and opened under
++// another used to fail at render time with "Color space 'sRGB' could not be
++// found" (the stored name is only validated on a user edit). When the active
++// config does not know a stored name, the first member of its group that the
++// config does know stands in. Roles ("scene_linear") resolve like names.
++static const char* const kColorSpaceSynonyms[][16] = {
++    { "sRGB", "sRGB D65", "sRGB - Texture", "srgb_tx", "srgb_texture", "srgb_rec709_scene",
++      "sRGB Encoded Rec.709 (sRGB)", "Utility - sRGB - Texture", "Input - Generic - sRGB - Texture",
++      "sRGB (D60 sim.)", "out_srgbd60sim", "srgb8", "rrt_srgb", NULL },
++    { "Linear", "linear", "scene_linear", "lin_rec709", "lin_srgb", "Linear Rec.709 (sRGB)",
++      "Utility - Linear - sRGB", "Linear Rec.709", "Linear ACES", "lin_ap1", "ACEScg", NULL },
++    { "Rec709", "nuke_rec709", "Rec.709 - Display", "rec709_display", "Rec.1886 Rec.709 - Display",
++      "rec1886_rec709_display", "g24_rec709_display", "Rec.709 - Camera", "camera_rec709",
++      "Utility - Rec.709 - Display", "rrt_rec709", "hd10", NULL },
++    { "Gamma2.2", "VD16", "vd16", "g22_rec709", "Gamma 2.2 Rec.709 - Texture", "g22_rec709_tx",
++      "Utility - Gamma 2.2 - Rec.709 - Texture", "Gamma 2.2 Rec.709 - Display", "g22_rec709_display",
++      "rrt_Gamma2.2", NULL },
++    { "Gamma1.8", "g18_rec709", "Gamma 1.8 Rec.709 - Texture", "g18_rec709_tx",
++      "Utility - Gamma 1.8 - Rec.709 - Texture", NULL },
++    { "Cineon", "KodakLog", "cineon", "REDlogFilm", "ADX10", "adx10", "lg10", NULL },
++    { "AdobeRGB", "adobergb", "AdobeRGB (1998)", NULL },
++};
++
++static bool
++sameNameNoCase(const char* a, const char* b)
++{
++    for (; *a && *b; ++a, ++b) {
++        if (std::tolower((unsigned char)*a) != std::tolower((unsigned char)*b)) {
++            return false;
++        }
++    }
++
++    return *a == *b;
++}
++
++// The stored name if the config knows it (or is missing), else its known twin
++// from kColorSpaceSynonyms, else the stored name unchanged.
++static string fallbackColorSpaceName(OCIO::ConstConfigRcPtr config);
++
++static string
++resolveColorSpaceName(OCIO::ConstConfigRcPtr config,
++                      const string& name)
++{
++    if (!config || name.empty() || config->getColorSpace(name.c_str())) {
++        return name;
++    }
++    if (name == OCIO::ROLE_DEFAULT) {
++        // The literal "default" written by older builds under a config that
++        // has no such role: use what that config falls back to.
++        const string fb = fallbackColorSpaceName(config);
++        return fb.empty() ? name : fb;
++    }
++    for (std::size_t g = 0; g < sizeof(kColorSpaceSynonyms) / sizeof(kColorSpaceSynonyms[0]); ++g) {
++        const char* const* group = kColorSpaceSynonyms[g];
++        bool member = false;
++        for (int i = 0; group[i] && !member; ++i) {
++            member = sameNameNoCase(group[i], name.c_str());
++        }
++        if (!member) {
++            continue;
++        }
++        for (int i = 0; group[i]; ++i) {
++            if (config->getColorSpace(group[i])) {
++                return group[i];
++            }
++        }
++    }
++
++    return name;
++}
++
++static string
++fallbackColorSpaceName(OCIO::ConstConfigRcPtr config)
++{
++    if (!config) {
++        return string();
++    }
++    const char* roles[] = { OCIO::ROLE_DEFAULT, OCIO::ROLE_SCENE_LINEAR, OCIO::ROLE_REFERENCE };
++    for (size_t i = 0; i < sizeof(roles) / sizeof(roles[0]); ++i) {
++        OCIO::ConstColorSpaceRcPtr cs = config->getColorSpace(roles[i]);
++        if (cs) {
++            return cs->getName();
++        }
++    }
++    if (config->getNumColorSpaces() > 0) {
++        const char* first = config->getColorSpaceNameByIndex(0);
++        if (first && *first) {
++            return first;
++        }
++    }
++    return string();
++}
++
+ static string
+ canonicalizeColorSpace(OCIO::ConstConfigRcPtr config,
+                        const string& csname)
+@@ -219,6 +330,11 @@ canonicalizeColorSpace(OCIO::ConstConfigRcPtr config,
+     const int texturepaintcs = config->getIndexForColorSpace(OCIO::ROLE_TEXTURE_PAINT);
+     const int mattepaintcs = config->getIndexForColorSpace(OCIO::ROLE_MATTE_PAINT);
+     int inputSpaceIndex = config->getIndexForColorSpace(csname.c_str());
++    if (inputSpaceIndex < 0) {
++        // Unknown name: never equate it with a role the config lacks (both
++        // are -1), which turned every unknown name into "default".
++        return csname;
++    }
+     if (inputSpaceIndex == scenelinearcs) {
+         return OCIO::ROLE_SCENE_LINEAR;
+     } else if (inputSpaceIndex == defaultcs) {
+@@ -928,16 +1044,10 @@ GenericOCIO::changedParam(const InstanceChangedArgs& args,
+             getInputColorspaceAtTime(args.time, inputSpaceName);
+             int inputSpaceIndex = _config->getIndexForColorSpace(inputSpaceName.c_str());
+             if (inputSpaceIndex < 0) {
+-                OCIO::ConstColorSpaceRcPtr cs;
+-                if (!cs) {
+-                    cs = _config->getColorSpace(OCIO::ROLE_DEFAULT);
+-                }
+-                if (!cs) {
+-                    // no default colorspace, fallback to the first one
+-                    cs = _config->getColorSpace(_config->getColorSpaceNameByIndex(0));
++                inputSpaceName = fallbackColorSpaceName(_config);
++                if (!inputSpaceName.empty()) {
++                    _inputSpace->setValue(inputSpaceName);
+                 }
+-                inputSpaceName = cs ? cs->getName() : OCIO::ROLE_DEFAULT;
+-                _inputSpace->setValue(inputSpaceName);
+             }
+         }
+         inputCheck(args.time);
+@@ -946,16 +1056,10 @@ GenericOCIO::changedParam(const InstanceChangedArgs& args,
+             getOutputColorspaceAtTime(args.time, outputSpaceName);
+             int outputSpaceIndex = _config->getIndexForColorSpace(outputSpaceName.c_str());
+             if (outputSpaceIndex < 0) {
+-                OCIO::ConstColorSpaceRcPtr cs;
+-                if (!cs) {
+-                    cs = _config->getColorSpace(OCIO::ROLE_DEFAULT);
++                outputSpaceName = fallbackColorSpaceName(_config);
++                if (!outputSpaceName.empty()) {
++                    _outputSpace->setValue(outputSpaceName);
+                 }
+-                if (!cs) {
+-                    // no default colorspace, fallback to the first one
+-                    cs = _config->getColorSpace(_config->getColorSpaceNameByIndex(0));
+-                }
+-                outputSpaceName = cs ? cs->getName() : OCIO::ROLE_DEFAULT;
+-                _outputSpace->setValue(OCIO::ROLE_DEFAULT);
+             }
+         }
+         outputCheck(args.time);
+@@ -1120,6 +1224,16 @@ GenericOCIO::changedParam(const InstanceChangedArgs& args,
+         return;
+     } else if (paramName == kOCIOParamInputSpace) {
+         assert(_inputSpace);
++        {
++            // A name from another config (typically a loaded project): store
++            // its twin in this config so the knob shows a valid entry.
++            string stored;
++            _inputSpace->getValueAtTime(args.time, stored);
++            const string resolved = resolveColorSpaceName(_config, stored);
++            if (resolved != stored) {
++                _inputSpace->setValue(resolved);
++            }
++        }
+         if (args.reason == eChangeUserEdit) {
+             // if the inputspace doesn't correspond to a valid one, reset to default.
+             // first, canonicalize.
+@@ -1135,18 +1249,12 @@ GenericOCIO::changedParam(const InstanceChangedArgs& args,
+                 if (args.reason == eChangeUserEdit) {
+                     _parent->sendMessage(Message::eMessageWarning, "", string("Unknown OCIO colorspace \"") + inputSpace + "\"");
+                 }
+-                OCIO::ConstColorSpaceRcPtr cs;
+-                if (!cs) {
+-                    cs = _config->getColorSpace(OCIO::ROLE_DEFAULT);
+-                }
+-                if (!cs) {
+-                    // no default colorspace, fallback to the first one
+-                    cs = _config->getColorSpace(_config->getColorSpaceNameByIndex(0));
++                const string fb = fallbackColorSpaceName(_config);
++                if (!fb.empty()) {
++                    inputSpace = fb;
++                    _inputSpace->setValue(inputSpace);
++                    inputSpaceIndex = _config->getIndexForColorSpace(inputSpace.c_str());
+                 }
+-                inputSpace = cs ? cs->getName() : OCIO::ROLE_DEFAULT;
+-                _inputSpace->setValue(inputSpace);
+-                inputSpaceIndex = _config->getIndexForColorSpace(inputSpace.c_str());
+-                assert(inputSpaceIndex >= 0);
+             }
+         }
+         inputCheck(args.time);
+@@ -1167,6 +1275,14 @@ GenericOCIO::changedParam(const InstanceChangedArgs& args,
+ #endif
+     else if (paramName == kOCIOParamOutputSpace) {
+         assert(_outputSpace);
++        {
++            string stored;
++            _outputSpace->getValueAtTime(args.time, stored);
++            const string resolved = resolveColorSpaceName(_config, stored);
++            if (resolved != stored) {
++                _outputSpace->setValue(resolved);
++            }
++        }
+         if (args.reason == eChangeUserEdit) {
+             // if the outputspace doesn't correspond to a valid one, reset to default.
+             // first, canonicalize.
+@@ -1182,18 +1298,12 @@ GenericOCIO::changedParam(const InstanceChangedArgs& args,
+                 if (args.reason == eChangeUserEdit) {
+                     _parent->sendMessage(Message::eMessageWarning, "", string("Unknown OCIO colorspace \"") + outputSpace + "\"");
+                 }
+-                OCIO::ConstColorSpaceRcPtr cs;
+-                if (!cs) {
+-                    cs = _config->getColorSpace(OCIO::ROLE_DEFAULT);
+-                }
+-                if (!cs) {
+-                    // no default colorspace, fallback to the first one
+-                    cs = _config->getColorSpace(_config->getColorSpaceNameByIndex(0));
++                const string fb = fallbackColorSpaceName(_config);
++                if (!fb.empty()) {
++                    outputSpace = fb;
++                    _outputSpace->setValue(outputSpace);
++                    outputSpaceIndex = _config->getIndexForColorSpace(outputSpace.c_str());
+                 }
+-                outputSpace = cs ? cs->getName() : OCIO::ROLE_DEFAULT;
+-                _outputSpace->setValue(outputSpace);
+-                outputSpaceIndex = _config->getIndexForColorSpace(outputSpace.c_str());
+-                assert(outputSpaceIndex >= 0);
+             }
+         }
+         outputCheck(args.time);
+@@ -1222,6 +1332,7 @@ GenericOCIO::getInputColorspaceDefault(string& v) const
+ {
+     assert(_inputSpace);
+     _inputSpace->getDefault(v);
++    v = resolveColorSpaceName(_config, v);
+ }
+ 
+ void
+@@ -1229,6 +1340,7 @@ GenericOCIO::getInputColorspace(string& v) const
+ {
+     assert(_inputSpace);
+     _inputSpace->getValue(v);
++    v = resolveColorSpaceName(_config, v);
+ }
+ 
+ void
+@@ -1237,6 +1349,7 @@ GenericOCIO::getInputColorspaceAtTime(double time,
+ {
+     assert(_inputSpace);
+     _inputSpace->getValueAtTime(time, v);
++    v = resolveColorSpaceName(_config, v);
+ }
+ 
+ void
+@@ -1244,6 +1357,7 @@ GenericOCIO::getOutputColorspaceDefault(string& v) const
+ {
+     assert(_outputSpace);
+     _outputSpace->getDefault(v);
++    v = resolveColorSpaceName(_config, v);
+ }
+ 
+ void
+@@ -1251,6 +1365,7 @@ GenericOCIO::getOutputColorspace(string& v) const
+ {
+     assert(_outputSpace);
+     _outputSpace->getValue(v);
++    v = resolveColorSpaceName(_config, v);
+ }
+ 
+ void
+@@ -1259,6 +1374,7 @@ GenericOCIO::getOutputColorspaceAtTime(double time,
+ {
+     assert(_outputSpace);
+     _outputSpace->getValueAtTime(time, v);
++    v = resolveColorSpaceName(_config, v);
+ }
+ 
+ #endif
+diff --git a/OIIO/ReadOIIO.cpp b/OIIO/ReadOIIO.cpp
+index 8e1eec6..d920b1c 100644
+--- a/OIIO/ReadOIIO.cpp
++++ b/OIIO/ReadOIIO.cpp
+@@ -499,7 +499,7 @@ private:
+     void getConfig(ImageSpec* config) const;
+ 
+     //// OIIO image cache
+-    ImageCache* _cache;
++    std::shared_ptr<ImageCache> _cache;
+ 
+     BooleanParam* _rawAutoBright;
+     BooleanParam* _rawUseCameraWB;
+@@ -546,7 +546,7 @@ ReadOIIOPlugin::ReadOIIOPlugin(OfxImageEffectHandle handle,
+                           false
+ #endif
+                           )
+-    , _cache(NULL)
++    , _cache(nullptr)
+     , _outputLayer(NULL)
+     , _outputLayerString(NULL)
+     , _availableViews(NULL)
+@@ -1497,6 +1497,56 @@ ReadOIIOPlugin::restoreStateFromParams()
+     _offsetNegativeDispWindow->setIsSecretAndDisabled(!supportsDisplayWindow);
+ }
+ 
++#ifdef OFX_IO_USING_OCIO
++// OpenImageIO 3.x labels files with the canonical names of OCIO's built-in config
++// ("srgb_rec709_scene", "lin_rec709", "g22_rec709", ...) and their aliases, where
++// OIIO 2.x wrote the legacy hints "sRGB" / "Linear" / "GammaCorrected". The per-config
++// lookup in guessColorspace() understands only the legacy hints, so fold the new
++// names back onto them. Names not in the table pass through unchanged (they may
++// still exist in the active config). *gamma receives the encoding gamma for the
++// "GammaCorrected" hint, 0 otherwise.
++static const char*
++legacyColorSpaceHint(const char* name,
++                     float* gamma)
++{
++    struct Hint { const char* oiio; const char* legacy; float gamma; };
++    static const Hint table[] = {
++        // sRGB-encoded textures
++        { "srgb_rec709_scene", "sRGB", 0.f },
++        { "srgb_tx", "sRGB", 0.f },
++        { "srgb_texture", "sRGB", 0.f },
++        { "sRGB - Texture", "sRGB", 0.f },
++        { "Utility - sRGB - Texture", "sRGB", 0.f },
++        { "sRGB Encoded Rec.709 (sRGB)", "sRGB", 0.f },
++        { "srgb_p3d65", "sRGB", 0.f }, // closest a classic config can do
++        // pure-gamma encodings
++        { "g22_rec709", "GammaCorrected", 2.2f },
++        { "g18_rec709", "GammaCorrected", 1.8f },
++        // scene-linear (a classic config has one linear space; primaries are lost)
++        { "lin_rec709", "Linear", 0.f },
++        { "lin_srgb", "Linear", 0.f },
++        { "linear", "Linear", 0.f },
++        { "scene_linear", "Linear", 0.f },
++        { "Linear Rec.709 (sRGB)", "Linear", 0.f },
++        { "Utility - Linear - sRGB", "Linear", 0.f },
++        { "lin_ap0", "Linear", 0.f },
++        { "lin_ap1", "Linear", 0.f },
++        { "lin_p3d65", "Linear", 0.f },
++        { "lin_rec2020", "Linear", 0.f },
++    };
++    *gamma = 0.f;
++    for (std::size_t i = 0; i < sizeof(table) / sizeof(table[0]); ++i) {
++        if (!strcmp(name, table[i].oiio)) {
++            *gamma = table[i].gamma;
++
++            return table[i].legacy;
++        }
++    }
++
++    return name;
++}
++#endif // OFX_IO_USING_OCIO
++
+ void
+ ReadOIIOPlugin::guessColorspace(const string& filename,
+                                 const ImageSpec& imagespec,
+@@ -1527,6 +1577,15 @@ ReadOIIOPlugin::guessColorspace(const string& filename,
+             colorSpaceStr = "KodakLog";
+         }
+     }
++    float gammaHint = 0.f;
++#ifdef OFX_IO_USING_OCIO
++    // Keep the file's name when the active config knows it (an OCIO v2 ACES config
++    // resolves "srgb_rec709_scene" through its aliases); otherwise map it onto the
++    // legacy hint the config-specific lookup below expects.
++    if (colorSpaceStr && !ocio->hasColorspace(colorSpaceStr)) {
++        colorSpaceStr = legacyColorSpaceHint(colorSpaceStr, &gammaHint);
++    }
++#endif
+     if (!colorSpaceStr) {
+         // no colorspace... we'll probably have to try something else, then.
+         // we set the following defaults:
+@@ -1554,7 +1613,7 @@ ReadOIIOPlugin::guessColorspace(const string& filename,
+     }
+     if (colorSpaceStr) {
+         if (colorSpaceStr && !strcmp(colorSpaceStr, "GammaCorrected")) {
+-            float gamma = imagespec.get_float_attribute("oiio:Gamma");
++            float gamma = gammaHint > 0.f ? gammaHint : imagespec.get_float_attribute("oiio:Gamma");
+             if (endsWith(filename, ".cin") || endsWith(filename, ".CIN")) {
+                 // Cineon files (e.g. Kodak Digital LAD, see link below) get wrongly attributed
+                 // a GammaCorrected colorspace <https://github.com/OpenImageIO/oiio/issues/1463>
+@@ -1604,6 +1663,18 @@ ReadOIIOPlugin::guessColorspace(const string& filename,
+                 // blender-cycles
+                 *colorspace = "sRGB D65";
+                 colorSpaceStr = NULL;
++            } else if (ocio->hasColorspace("sRGB - Texture")) {
++                // aces 1.1-1.3 (cg/studio configs also alias it as srgb_tx)
++                *colorspace = "sRGB - Texture";
++                colorSpaceStr = NULL;
++            } else if (ocio->hasColorspace("srgb_rec709_scene")) {
++                // aces 2.0 cg/studio configs ("sRGB Encoded Rec.709 (sRGB)")
++                *colorspace = "srgb_rec709_scene";
++                colorSpaceStr = NULL;
++            } else if (ocio->hasColorspace("Utility - sRGB - Texture")) {
++                // aces 1.0.x
++                *colorspace = "Utility - sRGB - Texture";
++                colorSpaceStr = NULL;
+             } else if (ocio->hasColorspace("sRGB (D60 sim.)")) {
+                 // out_srgbd60sim or "sRGB (D60 sim.)" in aces 1.0.0
+                 *colorspace = "sRGB (D60 sim.)";
+@@ -1724,8 +1795,17 @@ ReadOIIOPlugin::guessColorspace(const string& filename,
+             *colorspace = colorSpaceStr;
+             colorSpaceStr = NULL;
+         }
+-        if (colorSpaceStr) {
+-            // unknown color-space or Linear, don't do anything
++        if (colorSpaceStr && ocio->getConfig() && !ocio->hasColorspace(colorSpaceStr) && (colorSpaceValue || photoshopICCProfileValue)) {
++            // The file's hint names a colorspace this config does not have. Writing it
++            // through verbatim leaves the Read erroring ("Color space '...' could not be
++            // found") with a text field where the colorspace menu should be. Guess again
++            // as if the file carried no hint, so the bit-depth default applies instead.
++            ImageSpec unlabelled = imagespec;
++            unlabelled.erase_attribute("oiio:ColorSpace");
++            unlabelled.erase_attribute("photoshop:ICCProfile");
++            guessColorspace(filename, unlabelled, colorspace);
++
++            return;
+         }
+ #endif // OFX_IO_USING_OCIO
+     }
+@@ -2560,7 +2640,9 @@ ReadOIIOPlugin::decodePlane(const string& filename,
+                 if (spec.tile_width == 0) {
+                     // Read by scanlines
+ 
+-                    if (!img->read_scanlines(ybeginClamped, // y begin
++                    if (!img->read_scanlines(subImageIndex, // subimage
++                                             0, // miplevel
++                                             ybeginClamped, // y begin
+                                              yendClamped, // y end
+                                              zbegin, // z
+                                              chbegin, // chan begin
+@@ -2633,7 +2715,9 @@ ReadOIIOPlugin::decodePlane(const string& filename,
+ 
+                     // Pass the valid tile range and buffer to OIIO and decode with a negative Y stride from
+                     // top to bottom
+-                    if (!img->read_tiles(tiledXBegin, // x begin
++                    if (!img->read_tiles(subImageIndex, // subimage
++                                         0, // miplevel
++                                         tiledXBegin, // x begin
+                                          tiledXEnd, // x end
+                                          tiledYBegin, // y begin
+                                          tiledYEnd, // y end
+@@ -2960,7 +3044,7 @@ ReadOIIOPlugin::metadata(const string& filename)
+             ss << std::endl;
+         }
+ 
+-        for (ImageIOParameterList::const_iterator p = subImages[sIt].extra_attribs.begin(); p != subImages[sIt].extra_attribs.end(); ++p) {
++        for (auto p = subImages[sIt].extra_attribs.cbegin(); p != subImages[sIt].extra_attribs.cend(); ++p) {
+             string s = subImages[sIt].metadata_val(*p, true);
+             ss << "    " << p->name() << ": ";
+             if (s == "1.#INF") {
+@@ -3145,7 +3229,7 @@ ReadOIIOPluginFactory::unload()
+ 
+ #ifdef OFX_READ_OIIO_SHARED_CACHE
+     // get the shared image cache (may be shared with other plugins using OIIO)
+-    ImageCache* sharedcache = ImageCache::create(true);
++    std::shared_ptr<ImageCache> sharedcache = ImageCache::create(true);
+     // purge it
+     // teardown is dangerous if there are other users
+     ImageCache::destroy(sharedcache);
+diff --git a/OIIO/WriteOIIO.cpp b/OIIO/WriteOIIO.cpp
+index 801a9a4..96208e6 100644
+--- a/OIIO/WriteOIIO.cpp
++++ b/OIIO/WriteOIIO.cpp
+@@ -935,7 +935,7 @@ WriteOIIOPlugin::beginEncodeParts(void* user_data,
+         return;
+     }
+ 
+-    OIIO_NAMESPACE::TypeDesc oiioBitDepth;
++    OIIO::TypeDesc oiioBitDepth;
+     // size_t sizeOfChannel = 0;
+     int bitsPerSample = 0;
+     int finalBitDepth_i;
+diff --git a/PNG/ReadPNG.cpp b/PNG/ReadPNG.cpp
+index 5b1991f..fbc7ae5 100644
+--- a/PNG/ReadPNG.cpp
++++ b/PNG/ReadPNG.cpp
+@@ -1320,6 +1320,15 @@ ReadPNGPlugin::guessParamsFromFilename(const string& filename,
+             } else if (_ocio->hasColorspace("sRGB D65")) {
+                 // blender-cycles
+                 *colorspace = "sRGB D65";
++            } else if (_ocio->hasColorspace("sRGB - Texture")) {
++                // aces 1.1-1.3 (cg/studio configs also alias it as srgb_tx)
++                *colorspace = "sRGB - Texture";
++            } else if (_ocio->hasColorspace("srgb_rec709_scene")) {
++                // aces 2.0 cg/studio configs ("sRGB Encoded Rec.709 (sRGB)")
++                *colorspace = "srgb_rec709_scene";
++            } else if (_ocio->hasColorspace("Utility - sRGB - Texture")) {
++                // aces 1.0.x
++                *colorspace = "Utility - sRGB - Texture";
+             } else if (_ocio->hasColorspace("sRGB (D60 sim.)")) {
+                 // out_srgbd60sim or "sRGB (D60 sim.)" in aces 1.0.0
+                 *colorspace = "sRGB (D60 sim.)";
+@@ -1348,6 +1357,15 @@ ReadPNGPlugin::guessParamsFromFilename(const string& filename,
+         } else if (_ocio->hasColorspace("sRGB D65")) {
+             // blender-cycles
+             *colorspace = "sRGB D65";
++        } else if (_ocio->hasColorspace("sRGB - Texture")) {
++            // aces 1.1-1.3 (cg/studio configs also alias it as srgb_tx)
++            *colorspace = "sRGB - Texture";
++        } else if (_ocio->hasColorspace("srgb_rec709_scene")) {
++            // aces 2.0 cg/studio configs ("sRGB Encoded Rec.709 (sRGB)")
++            *colorspace = "srgb_rec709_scene";
++        } else if (_ocio->hasColorspace("Utility - sRGB - Texture")) {
++            // aces 1.0.x
++            *colorspace = "Utility - sRGB - Texture";
+         } else if (_ocio->hasColorspace("sRGB (D60 sim.)")) {
+             // out_srgbd60sim or "sRGB (D60 sim.)" in aces 1.0.0
+             *colorspace = "sRGB (D60 sim.)";
+diff --git a/cmake/Modules/FindOpenImageIO.cmake b/cmake/Modules/FindOpenImageIO.cmake
+index 4d4a7ee..760b9a6 100644
+--- a/cmake/Modules/FindOpenImageIO.cmake
++++ b/cmake/Modules/FindOpenImageIO.cmake
+@@ -98,6 +98,11 @@ if (OpenImageIO_FOUND)
+     set (OPENIMAGEIO_INCLUDES ${OPENIMAGEIO_INCLUDE_DIR})
+     set (OPENIMAGEIO_LIBRARIES ${OPENIMAGEIO_LIBRARY})
+     get_filename_component (OPENIMAGEIO_LIBRARY_DIRS "${OPENIMAGEIO_LIBRARY}" DIRECTORY)
++    # OIIO 3.x split OpenImageIO_Util into a separate library that ReadOIIO/WriteOIIO need.
++    find_library(OPENIMAGEIO_UTIL_LIBRARY NAMES OpenImageIO_Util HINTS ${OPENIMAGEIO_LIBRARY_DIRS})
++    if (OPENIMAGEIO_UTIL_LIBRARY)
++        list(APPEND OPENIMAGEIO_LIBRARIES ${OPENIMAGEIO_UTIL_LIBRARY})
++    endif()
+     if (NOT OpenImageIO_FIND_QUIETLY)
+         message ( STATUS "OpenImageIO includes     = ${OPENIMAGEIO_INCLUDE_DIR}" )
+         message ( STATUS "OpenImageIO libraries    = ${OPENIMAGEIO_LIBRARIES}" )
