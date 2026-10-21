@@ -27,22 +27,36 @@ if [[ "${MSYSTEM:-}" != "MINGW64" ]]; then
     exit 1
 fi
 
+# Retry a command a few times: MSYS2 and GitHub mirrors sometimes reject
+# downloads temporarily (HTTP 429 "Too Many Requests").
+retry() {
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if "$@"; then
+            return 0
+        fi
+        echo "Command failed (attempt ${attempt}/5), retrying in $((attempt * 30)) s: $*"
+        sleep $((attempt * 30))
+    done
+    return 1
+}
+
 echo "== Installing MSYS2 tools"
-pacman -S --needed --noconfirm git unzip mingw-w64-x86_64-wget mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake
+retry pacman -S --needed --noconfirm git unzip mingw-w64-x86_64-wget mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake
 
 echo "== Fetching submodules"
-git -C "${NATRON_DIR}" submodule update --init --recursive
+retry git -C "${NATRON_DIR}" submodule update --init --recursive
 
 echo "== Installing Natron build dependencies (Natron pacman repository)"
 if ! pacman -Q mingw-w64-x86_64-natron-build-deps-qt5 >/dev/null 2>&1; then
     "${NATRON_DIR}/.github/workflows/install_natron_pacman_repo.sh" "${NATRON_DIR}" "${NATRON_DIR}/natron_pacman_repo"
-    pacman -S --needed --noconfirm --overwrite "*" mingw-w64-x86_64-natron-build-deps-qt5
+    retry pacman -S --needed --noconfirm --overwrite "*" mingw-w64-x86_64-natron-build-deps-qt5
 fi
 
 echo "== Fetching OpenColorIO configs"
 if [[ ! -d "${NATRON_DIR}/OpenColorIO-Configs" ]]; then
     (cd "${NATRON_DIR}" &&
-        wget "https://github.com/NatronGitHub/OpenColorIO-Configs/archive/Natron-v${OCIO_CONFIG_VERSION}.tar.gz" &&
+        retry wget "https://github.com/NatronGitHub/OpenColorIO-Configs/archive/Natron-v${OCIO_CONFIG_VERSION}.tar.gz" &&
         tar xzf "Natron-v${OCIO_CONFIG_VERSION}.tar.gz" &&
         mv "OpenColorIO-Configs-Natron-v${OCIO_CONFIG_VERSION}" OpenColorIO-Configs &&
         rm "Natron-v${OCIO_CONFIG_VERSION}.tar.gz")
@@ -52,7 +66,7 @@ echo "== Fetching the openfx-io plug-ins (Read/Write nodes)"
 if [[ ! -d "${BUILD_DIR}/Plugins" ]]; then
     mkdir -p "${BUILD_DIR}/Plugins"
     (cd "${BUILD_DIR}/Plugins" &&
-        wget https://github.com/NatronGitHub/openfx-io/releases/download/natron_testing/openfx-io-build-windows_latest-testing.zip &&
+        retry wget https://github.com/NatronGitHub/openfx-io/releases/download/natron_testing/openfx-io-build-windows_latest-testing.zip &&
         unzip -q openfx-io-build-windows_latest-testing.zip &&
         rm openfx-io-build-windows_latest-testing.zip)
 fi
