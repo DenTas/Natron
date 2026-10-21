@@ -42,7 +42,7 @@ retry() {
 }
 
 echo "== Installing MSYS2 tools"
-retry pacman -S --needed --noconfirm git unzip mingw-w64-x86_64-wget mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake
+retry pacman -S --needed --noconfirm git unzip mingw-w64-x86_64-wget mingw-w64-x86_64-ninja mingw-w64-x86_64-cmake mingw-w64-x86_64-gcc
 
 echo "== Fetching submodules"
 retry git -C "${NATRON_DIR}" submodule update --init --recursive
@@ -69,6 +69,18 @@ if [[ ! -d "${BUILD_DIR}/Plugins" ]]; then
         retry wget https://github.com/NatronGitHub/openfx-io/releases/download/natron_testing/openfx-io-build-windows_latest-testing.zip &&
         unzip -q openfx-io-build-windows_latest-testing.zip &&
         rm openfx-io-build-windows_latest-testing.zip)
+fi
+
+echo "== Checking the compiler"
+if ! gcc --version || ! g++ --version; then
+    echo "gcc/g++ cannot be run. Check the output above, then re-run: pacman -S mingw-w64-x86_64-gcc"
+    exit 1
+fi
+# A previous configure that could not find the compiler leaves a broken cache behind.
+if [[ -f "${BUILD_DIR}/CMakeCache.txt" ]] && grep -q '^CMAKE_C\(XX\)\?_COMPILER:.*NOTFOUND' "${BUILD_DIR}/CMakeCache.txt"; then
+    echo "Removing a CMake cache left by a failed configure"
+    rm -f "${BUILD_DIR}/CMakeCache.txt"
+    rm -rf "${BUILD_DIR}/CMakeFiles"
 fi
 
 echo "== Configuring (RelWithDebInfo, NATRON_TRACY=${TRACY})"
