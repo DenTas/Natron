@@ -33,6 +33,7 @@ include(GNUInstallDirs)
 option(NATRON_QT6 "use Qt6" OFF)
 option(NATRON_SYSTEM_LIBS "use system versions of dependencies instead of bundled ones" OFF)
 option(NATRON_BUILD_TESTS "build the Natron test suite" ON)
+option(NATRON_TRACY "instrument Natron for the Tracy profiler (fetches the Tracy client)" OFF)
 
 set(IS_DEBUG_BUILD OFF)
 if(CMAKE_BUILD_TYPE MATCHES "^(debug|Debug|DEBUG)$")
@@ -151,6 +152,21 @@ elseif(WIN32)
         set(CMAKE_RC_COMPILE_OBJECT
             "<CMAKE_RC_COMPILER> <FLAGS> -O coff <DEFINES> -i <SOURCE> -o <OBJECT>")
     endif()
+endif()
+
+if(NATRON_TRACY)
+    include(FetchContent)
+    # The Tracy profiler GUI used to record a session must be the same version.
+    FetchContent_Declare(tracy
+        GIT_REPOSITORY https://github.com/wolfpld/tracy.git
+        GIT_TAG v0.11.1
+        GIT_SHALLOW TRUE
+    )
+    # Only stream data while a profiler is connected, so an instrumented build
+    # can run normally without one.
+    set(TRACY_ON_DEMAND ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(tracy)
+    add_compile_definitions(NATRON_USE_TRACY)
 endif()
 
 set(CMAKE_AUTOMOC ON)

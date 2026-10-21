@@ -83,6 +83,8 @@ GCC_DIAG_UNUSED_PRIVATE_FIELD_ON
 
 #include <QOpenGLContext>
 
+#include "Global/Profiling.h"
+
 
 #define USER_ROI_BORDER_TICK_SIZE 15.f
 #define USER_ROI_CROSS_RADIUS 15.f
@@ -253,6 +255,8 @@ ViewerGL::paintGL()
 {
     // always running in the main thread
     assert( qApp && qApp->thread() == QThread::currentThread() );
+    NATRON_PROFILE_FRAME(); // one frame = interval between two viewer repaints
+    NATRON_PROFILE_SCOPE("ViewerGL::paintGL");
 
     //if app is closing, just return
     if ( !_imp->viewerTab->getGui() ) {
@@ -1485,6 +1489,7 @@ ViewerGL::endTransferBufferFromRAMToGPU(int textureIndex,
                                         const Point& viewportCenter,
                                         bool isPartialRect)
 {
+    NATRON_PROFILE_SCOPE("ViewerGL::endTransferBufferFromRAMToGPU");
     if (recenterViewer) {
         QMutexLocker k(&_imp->zoomCtxMutex);
         double curCenterX = ( _imp->zoomCtx.left() + _imp->zoomCtx.right() ) / 2.;
@@ -1561,6 +1566,7 @@ ViewerGL::transferBufferFromRAMtoGPU(const unsigned char* ramBuffer,
     // always running in the main thread
     assert( qApp && qApp->thread() == QThread::currentThread() );
     assert( QOpenGLContext::currentContext() == context() );
+    NATRON_PROFILE_SCOPE("ViewerGL::transferBufferFromRAMtoGPU");
     GLenum e = glGetError();
     Q_UNUSED(e);
 
@@ -1639,6 +1645,7 @@ ViewerGL::transferBufferFromRAMtoGPU(const unsigned char* ramBuffer,
     assert(ramBuffer);
     if (ret && ramBuffer) {
         // update data directly on the mapped buffer
+        NATRON_PROFILE_SCOPE("memcpy to PBO");
         std::memcpy(ret, (void*)ramBuffer, bytesCount);
         GLboolean result = glUnmapBufferARB(GL_PIXEL_UNPACK_BUFFER_ARB); // release the mapped buffer
         assert(result == GL_TRUE);

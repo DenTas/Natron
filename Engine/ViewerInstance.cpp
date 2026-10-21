@@ -42,6 +42,8 @@ CLANG_DIAG_OFF(deprecated)
 #include <QThreadPool>
 CLANG_DIAG_ON(deprecated)
 
+#include "Global/Profiling.h"
+
 #include "Engine/AppInstance.h"
 #include "Engine/AppManager.h"
 #include "Engine/Cache.h"
@@ -1303,6 +1305,7 @@ ViewerInstance::renderViewer_internal(ViewIdx view,
                                       const RenderStatsPtr& stats,
                                       ViewerArgs& inArgs)
 {
+    NATRON_PROFILE_SCOPE("ViewerInstance::renderViewer_internal");
     // We are in the render thread, we may not have computed the RoD and lookup the cache yet
 
     ViewerParallelRenderArgsSetterPtr frameArgs;
@@ -1989,6 +1992,7 @@ renderFunctor(const RectI& roi,
               ViewerInstance* viewer,
               UpdateViewerParams::CachedTile tile)
 {
+    NATRON_PROFILE_SCOPE("Viewer tile conversion (scaleToTexture)");
     if ( (args.bitDepth == eImageBitDepthFloat) ) {
         // image is stored as linear, the OpenGL shader with do gamma/sRGB/Rec709 decompression, as well as gain and offset
         scaleToTexture32bits(roi, args, tile, (float*)tile.ramBuffer);
@@ -2863,6 +2867,7 @@ ViewerInstance::ViewerInstancePrivate::updateViewer(UpdateViewerParamsPtr params
 {
     // always running in the main thread
     assert( qApp && qApp->thread() == QThread::currentThread() );
+    NATRON_PROFILE_SCOPE("ViewerInstance::updateViewer (upload to GPU)");
 
     // QMutexLocker locker(&updateViewerMutex);
     // if (updateViewerRunning) {
@@ -2959,6 +2964,7 @@ ViewerInstance::isInputOptional(int n) const
 void
 ViewerInstance::onGammaChanged(double value)
 {
+    NATRON_PROFILE_SCOPE("ViewerInstance::onGammaChanged");
     // always running in the main thread
     assert( qApp && qApp->thread() == QThread::currentThread() );
     bool changed = false;
@@ -2996,6 +3002,7 @@ ViewerInstance::getGamma() const
 void
 ViewerInstance::onGainChanged(double exp)
 {
+    NATRON_PROFILE_SCOPE("ViewerInstance::onGainChanged");
     // always running in the main thread
     assert( qApp && qApp->thread() == QThread::currentThread() );
 
@@ -3063,6 +3070,7 @@ ViewerInstance::isAutoContrastEnabled() const
 void
 ViewerInstance::onColorSpaceChanged(ViewerColorSpaceEnum colorspace)
 {
+    NATRON_PROFILE_SCOPE("ViewerInstance::onColorSpaceChanged");
     // always running in the main thread
     assert( qApp && qApp->thread() == QThread::currentThread() );
 

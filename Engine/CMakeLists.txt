@@ -93,6 +93,10 @@ if(WIN32)
     target_link_libraries(NatronEngine PRIVATE mpr)
 endif()
 
+if(NATRON_TRACY)
+    target_link_libraries(NatronEngine PUBLIC Tracy::TracyClient)
+endif()
+
 target_include_directories(NatronEngine
     PUBLIC
         ../Global/glad$<IF:$<CONFIG:Debug>,Deb,Rel>/include

@@ -76,6 +76,8 @@ CLANG_DIAG_ON(unknown-pragmas)
 #include "Engine/WriteNode.h"
 #ifdef DEBUG
 #include "Engine/TLSHolder.h"
+
+#include "Global/Profiling.h"
 #endif
 
 
@@ -2013,6 +2015,13 @@ OfxEffectInstance::endSequenceRender(double first,
 StatusEnum
 OfxEffectInstance::render(const RenderActionArgs& args)
 {
+    NATRON_PROFILE_SCOPE("OFX plug-in render");
+#ifdef NATRON_USE_TRACY
+    {
+        const std::string pluginID = getPluginID();
+        NATRON_PROFILE_TEXT( pluginID.c_str(), pluginID.size() );
+    }
+#endif
     if (!_imp->initialized) {
         return eStatusFailed;
     }

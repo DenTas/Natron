@@ -72,6 +72,8 @@
 #include "Engine/ViewIdx.h"
 #include "Engine/ViewerInstance.h"
 
+#include "Global/Profiling.h"
+
 //#define NATRON_ALWAYS_ALLOCATE_FULL_IMAGE_BOUNDS
 
 NATRON_NAMESPACE_ENTER
@@ -314,6 +316,7 @@ EffectInstance::RenderRoIRetCode
 EffectInstance::renderRoI(const RenderRoIArgs & args,
                           std::map<ImagePlaneDesc, ImagePtr>* outputPlanes)
 {
+    NATRON_PROFILE_SCOPE("EffectInstance::renderRoI");
     //Do nothing if no components were requested
     if ( args.components.empty() ) {
         qDebug() << getScriptName_mt_safe().c_str() << "renderRoi: Early bail-out components requested empty";
